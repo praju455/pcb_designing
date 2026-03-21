@@ -3,7 +3,7 @@
 An AI-powered PCB design assistant that runs entirely on your local machine, integrated directly into KiCad as an Action Plugin.
 
 **What it does:**
-- Generate circuits from natural language descriptions
+- Generate circuits from natural language descriptions with generalized synthesis
 - Optimize component placement
 - Run DFM (Design for Manufacturability) checks
 - Export generated circuits as `.kicad_sch` schematic files
@@ -27,12 +27,15 @@ pcb/
     circuit_schema.py   # Pydantic models / request schemas
     requirements.txt    # Python dependencies
     engines/
-       llm_engine.py       # Ollama / GGUF LLM interface
-       placement_engine.py # Placement optimization
-       dfm_engine.py       # DFM rule checker
-       schematic_engine.py # Circuit graph builder
-       kicad_exporter.py   # .kicad_sch file generator
-    templates/          # Built-in circuit templates
+       llm_engine.py          # Ollama / GGUF LLM interface
+       prompt_parser.py       # Free-text prompt -> structured design intent
+       block_library.py       # Reusable circuit building blocks
+       circuit_synthesizer.py # Generalized circuit synthesis pipeline
+       placement_engine.py    # Placement optimization
+       dfm_engine.py          # DFM rule checker
+       schematic_engine.py    # Circuit graph builder
+       kicad_exporter.py      # .kicad_sch file generator
+    templates/          # Strong deterministic templates for known prompt families
     output/             # Generated files (gitignored)
 
  models/             # AI model assets (see models/README.md)
@@ -146,11 +149,39 @@ Or use the deploy script from repo root (Windows only):
 
 ---
 
-## AI Generation Modes
+## AI Generation Pipeline
 
-The backend selects the best available mode automatically:
+The backend now selects the best available path automatically:
 
-### Mode 1 — Ollama (recommended, used by default)
+### Mode 1 — Strong template match
+
+If the prompt clearly matches one of the built-in templates, the backend uses the deterministic template path:
+
+| Template | Description |
+|----------|-------------|
+| 555 Timer | Astable / monostable NE555 |
+| LED Resistor | LED with current limiting resistor |
+| 3.3V Regulator | LDO from 5V or 12V |
+| MOSFET Switch | N-channel low-side switch |
+| Op-Amp Buffer | Unity gain buffer |
+
+### Mode 2 — Generalized synthesis
+
+For broader prompts, the backend now uses a structured synthesis pipeline instead of relying only on the five fixed templates:
+
+1. Prompt parsing into structured design intent
+2. Circuit family detection such as regulator, MCU, sensor, switch, op-amp, filter, divider, or timer
+3. Block-based circuit assembly using reusable subcircuits
+4. Validation, placement, and KiCad schematic export
+
+This makes prompts like these work much better than before:
+
+- `12V to 3.3V regulator for sensor board with status LED`
+- `mosfet switch for controlling a 12V fan from microcontroller`
+- `op amp buffer for analog sensor output`
+- `simple RC low pass filter with output header`
+
+### Mode 3 — Ollama / local LLM fallback
 
 Backend auto-detects Ollama at `http://localhost:11434` and picks the first available model:
 
@@ -169,19 +200,7 @@ $env:OLLAMA_API_URL = "http://localhost:11434"   # default
 $env:OLLAMA_MODEL   = "deepseek-coder:6.7b"      # force a specific model
 ```
 
-### Mode 2 — Template-only (always available, no Ollama needed)
-
-Built-in deterministic templates — works offline with zero AI:
-
-| Template | Description |
-|----------|-------------|
-| 555 Timer | Astable / monostable NE555 |
-| LED Resistor | LED with current limiting resistor |
-| 3.3V Regulator | LDO from 5V or 12V |
-| MOSFET Switch | N-channel low-side switch |
-| Op-Amp Buffer | Unity gain buffer |
-
-### Mode 3 — GGUF local model (optional fallback)
+### Mode 4 — GGUF local model (optional fallback)
 
 If Ollama is not installed, the backend can use a local GGUF file via `llama-cpp-python`:
 
@@ -215,7 +234,21 @@ Base URL: `http://127.0.0.1:8765`
 }
 ```
 
-`priority` options: `"quality"` | `"speed"` | `"template"`
+`priority` options: `"quality"` | `"speed"` | `"compact"`
+
+Typical `/generate` response fields now include:
+
+```json
+{
+  "success": true,
+  "template_used": "synth:regulator",
+  "generation_mode": "synthesized",
+  "intent": {
+    "primary_family": "regulator"
+  },
+  "download_url": "/download/example.kicad_sch"
+}
+```
 
 ---
 
