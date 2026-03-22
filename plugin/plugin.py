@@ -41,6 +41,8 @@ class PluginConfig:
     placement_step_size: float = 1.0  # mm
     thermal_aware: bool = True
     constraint_driven: bool = True
+    freerouting_jar: str = ""
+    freerouting_timeout: int = 900
     
     # File paths
     config_dir: str = field(default_factory=lambda: os.path.join(
@@ -1307,16 +1309,18 @@ class AIDashboardDialog(wx.Frame):
         self.btn_write = self._action_button(panel, "Board Summary", wx.Colour(0, 180, 180))
         self.btn_netlist = self._action_button(panel, "Generate Netlist", wx.Colour(40, 70, 220))
         self.btn_place = self._action_button(panel, "AI Component Placement", wx.Colour(0, 165, 95))
+        self.btn_route = self._action_button(panel, "FreeRouting Autoroute", wx.Colour(0, 145, 155))
         self.btn_mfg = self._action_button(panel, "Manufacturing Checks", wx.Colour(220, 125, 0))
         self.btn_drc = self._action_button(panel, "Run DRC Check", wx.Colour(165, 45, 180))
 
-        for btn in (self.btn_generate, self.btn_write, self.btn_netlist, self.btn_place, self.btn_mfg, self.btn_drc):
+        for btn in (self.btn_generate, self.btn_write, self.btn_netlist, self.btn_place, self.btn_route, self.btn_mfg, self.btn_drc):
             vbox.Add(btn, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 16)
 
         self.btn_generate.Bind(wx.EVT_BUTTON, self._on_generate)
         self.btn_write.Bind(wx.EVT_BUTTON, self._on_board_summary)
         self.btn_netlist.Bind(wx.EVT_BUTTON, self._on_netlist)
         self.btn_place.Bind(wx.EVT_BUTTON, self._on_placement)
+        self.btn_route.Bind(wx.EVT_BUTTON, self._on_freerouting)
         self.btn_mfg.Bind(wx.EVT_BUTTON, self._on_dfm)
         self.btn_drc.Bind(wx.EVT_BUTTON, self._on_drc)
 
@@ -1376,6 +1380,99 @@ class AIDashboardDialog(wx.Frame):
         dlg = wx.MessageDialog(self, text, title, wx.OK | wx.ICON_INFORMATION)
         dlg.ShowModal()
         dlg.Destroy()
+
+    def _select_freerouting_jar(self) -> Optional[str]:
+        start_dir = os.path.dirname(CONFIG.freerouting_jar) if CONFIG.freerouting_jar else os.path.expanduser("~")
+        with wx.FileDialog(
+            self,
+            "Select FreeRouting JAR",
+            defaultDir=start_dir,
+            wildcard="JAR files (*.jar)|*.jar",
+            style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST,
+        ) as dlg:
+            if dlg.ShowModal() == wx.ID_OK:
+                path = dlg.GetPath()
+                CONFIG.freerouting_jar = path
+                CONFIG.save()
+                return path
+        return None
+
+    def _ensure_freerouting_jar(self) -> str:
+        jar = (CONFIG.freerouting_jar or "").strip()
+        if jar and os.path.exists(jar):
+            return jar
+        chosen = self._select_freerouting_jar()
+        if chosen and os.path.exists(chosen):
+            return chosen
+        raise RuntimeError(
+            "FreeRouting JAR not configured. Download freerouting.jar and select it when prompted."
+        )
+
+    def _call_first_available(self, names: List[str], *args):
+        errors = []
+        for name in names:
+            fn = getattr(pcbnew, name, None)
+            if not callable(fn):
+                continue
+            try:
+                return fn(*args)
+            except TypeError as exc:
+                errors.append(f"{name}: {exc}")
+                continue
+        if errors:
+            raise RuntimeError("; ".join(errors))
+        raise RuntimeError(f"KiCad API not available for any of: {', '.join(names)}")
+
+    def _export_dsn(self, dsn_path: str):
+        board_path = self.board.GetFileName() if self.board else ""
+        errors = []
+        candidates = [
+            ("ExportSpecctraDSN", (self.board, dsn_path)),
+            ("ExportSpecctraDSN", (dsn_path,)),
+            ("ExportDSN", (self.board, dsn_path)),
+            ("ExportDSN", (dsn_path,)),
+        ]
+        for name, args in candidates:
+            fn = getattr(pcbnew, name, None)
+            if not callable(fn):
+                continue
+            try:
+                fn(*args)
+                if os.path.exists(dsn_path):
+                    return
+            except Exception as exc:
+                errors.append(f"{name}: {exc}")
+        raise RuntimeError(
+            "Unable to export DSN from KiCad. Save the board first and verify your KiCad build supports Specctra export."
+            + (f" Details: {' | '.join(errors)}" if errors else "")
+            + (f" Board: {board_path}" if board_path else "")
+        )
+
+    def _import_ses(self, ses_path: str) -> bool:
+        errors = []
+        candidates = [
+            ("ImportSpecctraSES", (self.board, ses_path)),
+            ("ImportSpecctraSES", (ses_path,)),
+            ("ImportSpecctraSession", (self.board, ses_path)),
+            ("ImportSpecctraSession", (ses_path,)),
+            ("LoadSpecctraSession", (self.board, ses_path)),
+            ("LoadSpecctraSession", (ses_path,)),
+        ]
+        for name, args in candidates:
+            fn = getattr(pcbnew, name, None)
+            if not callable(fn):
+                continue
+            try:
+                fn(*args)
+                try:
+                    pcbnew.Refresh()
+                except Exception:
+                    pass
+                return True
+            except Exception as exc:
+                errors.append(f"{name}: {exc}")
+        logger.warning("SES import not available: %s", " | ".join(errors))
+        return False
 
     def _on_generate(self, event):
         prompt = self._prompt_dialog(
@@ -1623,6 +1720,58 @@ class AIDashboardDialog(wx.Frame):
         except Exception as exc:
             self._set_status("Placement failed.", (255, 120, 120))
             self._show_text("Error", str(exc))
+
+    def _on_freerouting(self, event):
+        board_file = self.board.GetFileName() if self.board else ""
+        if not board_file:
+            self._show_text("FreeRouting Autoroute", "Save the PCB board first before running FreeRouting.")
+            return
+
+        try:
+            jar_path = self._ensure_freerouting_jar()
+            board_dir = os.path.dirname(board_file) or os.getcwd()
+            board_base = os.path.splitext(os.path.basename(board_file))[0]
+            dsn_path = os.path.join(board_dir, f"{board_base}.dsn")
+            ses_path = os.path.join(board_dir, f"{board_base}.ses")
+
+            self._set_status("Exporting DSN for FreeRouting...", (255, 210, 90))
+            self._export_dsn(dsn_path)
+
+            self._set_status("Running FreeRouting...", (255, 210, 90))
+            cmd = ["java", "-jar", jar_path, "-de", dsn_path, "-do", ses_path]
+            proc = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=max(60, int(CONFIG.freerouting_timeout)),
+            )
+            if proc.returncode != 0:
+                stderr = (proc.stderr or proc.stdout or "Unknown FreeRouting error").strip()
+                raise RuntimeError(stderr[-1200:])
+
+            if not os.path.exists(ses_path):
+                raise RuntimeError("FreeRouting finished but no SES session file was produced.")
+
+            imported = self._import_ses(ses_path)
+            summary = (
+                f"DSN: {dsn_path}\n"
+                f"SES: {ses_path}\n"
+                f"Imported into KiCad: {'Yes' if imported else 'No'}"
+            )
+            if not imported:
+                summary += "\n\nImport the SES manually in KiCad via File > Import > SES."
+
+            self._set_status("FreeRouting completed.", (0, 210, 110))
+            self._show_text("FreeRouting Autoroute", summary)
+        except subprocess.TimeoutExpired:
+            self._set_status("FreeRouting timed out.", (255, 120, 120))
+            self._show_text(
+                "FreeRouting Autoroute",
+                "FreeRouting timed out before finishing. Try a simpler board or increase freerouting_timeout in config.",
+            )
+        except Exception as exc:
+            self._set_status("FreeRouting failed.", (255, 120, 120))
+            self._show_text("FreeRouting Autoroute", str(exc))
 
     def _on_dfm(self, event):
         self._run_board_check("/dfm/check", "Manufacturing Checks")
