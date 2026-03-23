@@ -1280,7 +1280,7 @@ class AIDashboardDialog(wx.Frame):
     """Dashboard-first launcher styled after the prototype plugin UI."""
 
     def __init__(self, parent, plugin: AIPlacementPlugin, board: pcbnew.BOARD):
-        super().__init__(parent, title="AI KiCad Plugin", size=(460, 650), style=wx.DEFAULT_FRAME_STYLE | wx.STAY_ON_TOP)
+        super().__init__(parent, title="AI KiCad Plugin", size=(460, 760), style=wx.DEFAULT_FRAME_STYLE | wx.STAY_ON_TOP)
         self.plugin = plugin
         self.board = board
         self.SetBackgroundColour(wx.Colour(26, 26, 30))
@@ -1306,23 +1306,25 @@ class AIDashboardDialog(wx.Frame):
         vbox.Add(line, 0, wx.EXPAND | wx.ALL, 16)
 
         self.btn_generate = self._action_button(panel, "Auto Generate Schematic", wx.Colour(0, 120, 220))
-        self.btn_write = self._action_button(panel, "Board Summary", wx.Colour(0, 180, 180))
+        self.btn_write = self._action_button(panel, "Write Components to PCB", wx.Colour(0, 180, 180))
         self.btn_netlist = self._action_button(panel, "Generate Netlist", wx.Colour(40, 70, 220))
-        self.btn_place = self._action_button(panel, "AI Component Placement", wx.Colour(0, 165, 95))
+        self.btn_place = self._action_button(panel, "AI Component Placement (RL)", wx.Colour(0, 165, 95))
         self.btn_route = self._action_button(panel, "FreeRouting Autoroute", wx.Colour(0, 145, 155))
         self.btn_mfg = self._action_button(panel, "Manufacturing Checks", wx.Colour(220, 125, 0))
         self.btn_drc = self._action_button(panel, "Run DRC Check", wx.Colour(165, 45, 180))
+        self.btn_gerber = self._action_button(panel, "Export Gerber Files", wx.Colour(190, 55, 55))
 
-        for btn in (self.btn_generate, self.btn_write, self.btn_netlist, self.btn_place, self.btn_route, self.btn_mfg, self.btn_drc):
+        for btn in (self.btn_generate, self.btn_write, self.btn_netlist, self.btn_place, self.btn_route, self.btn_mfg, self.btn_drc, self.btn_gerber):
             vbox.Add(btn, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 16)
 
         self.btn_generate.Bind(wx.EVT_BUTTON, self._on_generate)
-        self.btn_write.Bind(wx.EVT_BUTTON, self._on_board_summary)
+        self.btn_write.Bind(wx.EVT_BUTTON, self._on_write_components)
         self.btn_netlist.Bind(wx.EVT_BUTTON, self._on_netlist)
         self.btn_place.Bind(wx.EVT_BUTTON, self._on_placement)
         self.btn_route.Bind(wx.EVT_BUTTON, self._on_freerouting)
         self.btn_mfg.Bind(wx.EVT_BUTTON, self._on_dfm)
         self.btn_drc.Bind(wx.EVT_BUTTON, self._on_drc)
+        self.btn_gerber.Bind(wx.EVT_BUTTON, self._on_export_gerbers)
 
         self.status = wx.StaticText(panel, label="Checking backend status...")
         self.status.SetForegroundColour(wx.Colour(0, 210, 110))
@@ -1473,6 +1475,97 @@ class AIDashboardDialog(wx.Frame):
                 errors.append(f"{name}: {exc}")
         logger.warning("SES import not available: %s", " | ".join(errors))
         return False
+
+    def _export_gerbers(self, output_dir: str) -> List[str]:
+        os.makedirs(output_dir, exist_ok=True)
+        generated: List[str] = []
+        plot_controller = pcbnew.PLOT_CONTROLLER(self.board)
+        options = plot_controller.GetPlotOptions()
+        options.SetOutputDirectory(output_dir)
+        options.SetPlotFrameRef(False)
+        options.SetAutoScale(False)
+        options.SetScale(1)
+        options.SetMirror(False)
+        options.SetUseGerberAttributes(True)
+        try:
+            options.SetUseGerberX2format(True)
+        except Exception:
+            pass
+        try:
+            options.SetSubtractMaskFromSilk(False)
+        except Exception:
+            pass
+
+        layers = [
+            ("F_Cu", pcbnew.F_Cu, "Front copper"),
+            ("B_Cu", pcbnew.B_Cu, "Back copper"),
+            ("F_SilkS", pcbnew.F_SilkS, "Front silkscreen"),
+            ("B_SilkS", pcbnew.B_SilkS, "Back silkscreen"),
+            ("F_Mask", pcbnew.F_Mask, "Front solder mask"),
+            ("B_Mask", pcbnew.B_Mask, "Back solder mask"),
+            ("Edge_Cuts", pcbnew.Edge_Cuts, "Board outline"),
+        ]
+
+        for suffix, layer_id, description in layers:
+            plot_controller.SetLayer(layer_id)
+            plot_controller.OpenPlotfile(suffix, pcbnew.PLOT_FORMAT_GERBER, description)
+            if plot_controller.PlotLayer():
+                generated.append(os.path.join(output_dir, f"{suffix}.gbr"))
+        plot_controller.ClosePlot()
+
+        excellon = getattr(pcbnew, "EXCELLON_WRITER", None)
+        if excellon is not None:
+            try:
+                drill_writer = excellon(self.board)
+                try:
+                    drill_writer.SetFormat(True)
+                except Exception:
+                    pass
+                try:
+                    drill_writer.SetOptions(False, False, output_dir, False)
+                except TypeError:
+                    try:
+                        drill_writer.SetOptions(False, False, output_dir)
+                    except Exception:
+                        pass
+                try:
+                    drill_writer.CreateDrillandMapFilesSet(output_dir, True, False)
+                except TypeError:
+                    drill_writer.CreateDrillandMapFilesSet(output_dir, True, False, False)
+            except Exception as exc:
+                logger.warning("Excellon drill export failed: %s", exc)
+
+        return generated
+
+    def _on_export_gerbers(self, event):
+        board_file = self.board.GetFileName() if self.board else ""
+        if not board_file:
+            self._show_text("Export Gerber Files", "Save the PCB board first before exporting Gerbers.")
+            return
+
+        board_dir = os.path.dirname(board_file) or os.getcwd()
+        default_dir = os.path.join(board_dir, "gerbers")
+        with wx.DirDialog(self, "Choose Gerber output folder", defaultPath=default_dir, style=wx.DD_DEFAULT_STYLE | wx.DD_DIR_MUST_EXIST) as dlg:
+            if dlg.ShowModal() == wx.ID_OK:
+                output_dir = dlg.GetPath()
+            else:
+                return
+
+        try:
+            self._set_status("Exporting Gerber files...", (255, 210, 90))
+            generated = self._export_gerbers(output_dir)
+            summary = [f"Gerber output: {output_dir}"]
+            if generated:
+                summary.append("")
+                summary.append("Layers exported:")
+                summary.extend(os.path.basename(path) for path in generated)
+            summary.append("")
+            summary.append("Drill files are exported when KiCad's Excellon writer is available.")
+            self._set_status("Gerber export complete.", (0, 210, 110))
+            self._show_text("Export Gerber Files", "\n".join(summary))
+        except Exception as exc:
+            self._set_status("Gerber export failed.", (255, 120, 120))
+            self._show_text("Export Gerber Files", str(exc))
 
     def _on_generate(self, event):
         prompt = self._prompt_dialog(
@@ -1661,17 +1754,42 @@ class AIDashboardDialog(wx.Frame):
                 pass
         return moved
 
-    def _on_board_summary(self, event):
+    def _project_schematic_path(self) -> Optional[str]:
+        board_file = self.board.GetFileName() if self.board else ""
+        if not board_file:
+            return None
+        candidate = os.path.splitext(board_file)[0] + ".kicad_sch"
+        return candidate if os.path.exists(candidate) else None
+
+    def _on_write_components(self, event):
+        board_file = self.board.GetFileName() if self.board else ""
+        if not board_file:
+            self._show_text("Write Components to PCB", "Save the PCB project first so KiCad can link it with the project schematic.")
+            return
+
         data = self._collect_board_data()
-        text = (
-            f"Board size: {data['board_width']:.1f} mm x {data['board_height']:.1f} mm\n"
-            f"Footprints: {len(data['components'])}\n"
-            f"Nets: {len(data['connections'])}\n\n"
-            "This dashboard now uses direct board snapshots to avoid KiCad crashes "
-            "from the older heavy frame path."
-        )
-        self._set_status("Board snapshot captured.", (0, 210, 110))
-        self._show_text("Board Summary", text)
+        schematic_path = self._project_schematic_path()
+        lines = [f"PCB file: {board_file}"]
+        if schematic_path:
+            lines.append(f"Project schematic: {schematic_path}")
+        else:
+            lines.append("Project schematic: not found next to the board")
+
+        if data["components"]:
+            lines.append("")
+            lines.append(f"The PCB already contains {len(data['components'])} footprint(s).")
+            lines.append("If you changed the schematic, run KiCad: Tools > Update PCB from Schematic.")
+        else:
+            lines.append("")
+            lines.append("No footprints are currently on the PCB.")
+            lines.append("To write components to the PCB:")
+            lines.append("1. Open the project schematic in Schematic Editor")
+            lines.append("2. Assign footprints to symbols")
+            lines.append("3. In PCB Editor, run Tools > Update PCB from Schematic")
+            lines.append("4. Save the .kicad_pcb board and rerun placement/routing")
+
+        self._set_status("Checked PCB write workflow.", (0, 210, 110))
+        self._show_text("Write Components to PCB", "\n".join(lines))
 
     def _on_netlist(self, event):
         prompt = self._prompt_dialog(
