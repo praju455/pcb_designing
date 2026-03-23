@@ -11,6 +11,7 @@ import math
 import os
 import queue
 import re
+import shutil
 import subprocess
 import tempfile
 import threading
@@ -1280,7 +1281,7 @@ class AIDashboardDialog(wx.Frame):
     """Dashboard-first launcher styled after the prototype plugin UI."""
 
     def __init__(self, parent, plugin: AIPlacementPlugin, board: pcbnew.BOARD):
-        super().__init__(parent, title="AI KiCad Plugin", size=(460, 760), style=wx.DEFAULT_FRAME_STYLE | wx.STAY_ON_TOP)
+        super().__init__(parent, title="AI KiCad Plugin", size=(460, 840), style=wx.DEFAULT_FRAME_STYLE | wx.STAY_ON_TOP)
         self.plugin = plugin
         self.board = board
         self.SetBackgroundColour(wx.Colour(26, 26, 30))
@@ -1310,11 +1311,12 @@ class AIDashboardDialog(wx.Frame):
         self.btn_netlist = self._action_button(panel, "Generate Netlist", wx.Colour(40, 70, 220))
         self.btn_place = self._action_button(panel, "AI Component Placement (RL)", wx.Colour(0, 165, 95))
         self.btn_route = self._action_button(panel, "FreeRouting Autoroute", wx.Colour(0, 145, 155))
+        self.btn_sim = self._action_button(panel, "ngspice Integration", wx.Colour(120, 85, 200))
         self.btn_mfg = self._action_button(panel, "Manufacturing Checks", wx.Colour(220, 125, 0))
         self.btn_drc = self._action_button(panel, "Run DRC Check", wx.Colour(165, 45, 180))
         self.btn_gerber = self._action_button(panel, "Export Gerber Files", wx.Colour(190, 55, 55))
 
-        for btn in (self.btn_generate, self.btn_write, self.btn_netlist, self.btn_place, self.btn_route, self.btn_mfg, self.btn_drc, self.btn_gerber):
+        for btn in (self.btn_generate, self.btn_write, self.btn_netlist, self.btn_place, self.btn_route, self.btn_sim, self.btn_mfg, self.btn_drc, self.btn_gerber):
             vbox.Add(btn, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 16)
 
         self.btn_generate.Bind(wx.EVT_BUTTON, self._on_generate)
@@ -1322,6 +1324,7 @@ class AIDashboardDialog(wx.Frame):
         self.btn_netlist.Bind(wx.EVT_BUTTON, self._on_netlist)
         self.btn_place.Bind(wx.EVT_BUTTON, self._on_placement)
         self.btn_route.Bind(wx.EVT_BUTTON, self._on_freerouting)
+        self.btn_sim.Bind(wx.EVT_BUTTON, self._on_ngspice)
         self.btn_mfg.Bind(wx.EVT_BUTTON, self._on_dfm)
         self.btn_drc.Bind(wx.EVT_BUTTON, self._on_drc)
         self.btn_gerber.Bind(wx.EVT_BUTTON, self._on_export_gerbers)
@@ -1890,6 +1893,52 @@ class AIDashboardDialog(wx.Frame):
         except Exception as exc:
             self._set_status("FreeRouting failed.", (255, 120, 120))
             self._show_text("FreeRouting Autoroute", str(exc))
+
+    def _on_ngspice(self, event):
+        board_file = self.board.GetFileName() if self.board else ""
+        schematic_path = self._project_schematic_path()
+        ngspice_path = shutil.which("ngspice")
+
+        lines = ["ngspice integration status", ""]
+        lines.append(f"PCB file: {board_file or 'Not saved'}")
+        lines.append(f"Project schematic: {schematic_path or 'Not found'}")
+        lines.append(f"ngspice executable: {ngspice_path or 'Not installed'}")
+        lines.append("")
+
+        if not schematic_path:
+            lines.append("This project is not ready for simulation because the project schematic was not found next to the PCB file.")
+        else:
+            try:
+                schematic_text = open(schematic_path, 'r', encoding='utf-8', errors='ignore').read()
+            except Exception as exc:
+                schematic_text = ""
+                lines.append(f"Could not read schematic: {exc}")
+
+            if schematic_text:
+                has_sim_model = any(token in schematic_text.lower() for token in ["sim.library", "sim.device", "spice_model", "spice"])
+                if has_sim_model:
+                    lines.append("Schematic contains simulation-related fields or model hints.")
+                else:
+                    lines.append("No obvious SPICE model fields were detected in the schematic yet.")
+                lines.append("Open KiCad Schematic Editor -> Inspect -> Simulator for native ngspice workflow.")
+
+        if not ngspice_path:
+            lines.append("")
+            lines.append("Install ngspice first, for example on macOS:")
+            lines.append("brew install ngspice")
+        else:
+            try:
+                proc = subprocess.run([ngspice_path, '-v'], capture_output=True, text=True, timeout=10)
+                version_line = (proc.stdout or proc.stderr or '').strip().splitlines()
+                if version_line:
+                    lines.append("")
+                    lines.append(f"Detected: {version_line[0]}")
+            except Exception as exc:
+                lines.append("")
+                lines.append(f"Failed to query ngspice version: {exc}")
+
+        self._set_status("Checked ngspice integration.", (0, 210, 110))
+        self._show_text("ngspice Integration", "\n".join(lines))
 
     def _on_dfm(self, event):
         self._run_board_check("/dfm/check", "Manufacturing Checks")
