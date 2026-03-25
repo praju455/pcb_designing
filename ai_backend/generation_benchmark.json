@@ -98,6 +98,27 @@
       "priority": "quality",
       "expected_generation_mode": "synthesized",
       "expected_support_status": "supported"
+    },
+    {
+      "name": "protected_regulator_board",
+      "prompt": "Design a protected 12V to 5V regulator board with reverse polarity protection, fuse, TVS diode, and regulated output header.",
+      "priority": "quality",
+      "expected_generation_mode": "synthesized",
+      "expected_support_status": "supported"
+    },
+    {
+      "name": "comparator_controlled_switch",
+      "prompt": "Create a comparator-controlled MOSFET switch board with 12V input, threshold detector, control output, and low-side load switch.",
+      "priority": "quality",
+      "expected_generation_mode": "synthesized",
+      "expected_support_status": "supported"
+    },
+    {
+      "name": "relay_sensor_control_board",
+      "prompt": "Build a relay plus sensor control board with 12V input, sensor input header, comparator threshold stage, relay driver, flyback diode, and relay contact header.",
+      "priority": "quality",
+      "expected_generation_mode": "synthesized",
+      "expected_support_status": "supported"
     }
   ]
 }

@@ -69,6 +69,8 @@ def synthesize_circuit(
             output_net=main_supply,
             output_voltage=_output_voltage_label(intent),
         )
+        if any(token in intent.normalized_prompt for token in ("output", "header", "board", "rail")):
+            add_output_header(builder, signal_net=main_supply, label="Regulated output")
         synthesized = True
 
     supply_for_logic = main_supply if intent.wants_regulator else input_net
@@ -89,8 +91,13 @@ def synthesize_circuit(
         synthesized = True
 
     if intent.wants_switch:
-        control_net = "GPIO_OUT" if intent.wants_mcu else "CTRL"
-        if not intent.wants_mcu:
+        if intent.wants_mcu:
+            control_net = "GPIO_OUT"
+        elif intent.wants_comparator:
+            control_net = "CMP_OUT"
+        else:
+            control_net = "CTRL"
+        if not intent.wants_mcu and not intent.wants_comparator:
             add_output_header(builder, signal_net=control_net, label="Control input")
         load_supply = "12V" if (intent.supply_voltage or 0) >= 9 else supply_for_logic
         if load_supply != input_net:
@@ -116,8 +123,13 @@ def synthesize_circuit(
         synthesized = True
 
     if intent.wants_relay:
-        control_net = "GPIO_OUT" if intent.wants_mcu else "RELAY_CTRL"
-        if not intent.wants_mcu:
+        if intent.wants_mcu:
+            control_net = "GPIO_OUT"
+        elif intent.wants_comparator:
+            control_net = "CMP_OUT"
+        else:
+            control_net = "RELAY_CTRL"
+        if not intent.wants_mcu and not intent.wants_comparator:
             add_output_header(builder, signal_net=control_net, label="Relay control input")
         add_relay_driver(builder, control_net=control_net, supply_net=("12V" if (intent.supply_voltage or 0) >= 9 else supply_for_logic))
         synthesized = True

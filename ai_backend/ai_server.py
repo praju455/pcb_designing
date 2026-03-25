@@ -1270,13 +1270,16 @@ def _assess_support_status(intent: DesignIntent, generation_mode: str, board: Bo
         missing.append("input protection stage")
     if intent.wants_button and "SW" not in prefixes:
         missing.append("button input stage")
-    if intent.wants_regulator and not any(c.part.startswith(("AMS1117", "LM7805")) for c in board.components):
+    if intent.wants_regulator and not any(
+        (c.value or "").startswith(("3.3V", "5V")) or "regulator" in (getattr(c, "footprint", "") or "").lower()
+        for c in board.components
+    ):
         missing.append("regulator stage")
     if intent.wants_divider and len([c for c in board.components if c.prefix == "R"]) < 2:
         missing.append("divider resistors")
     if intent.wants_filter and not ({"R", "C"} <= prefixes):
         missing.append("RC filter stage")
-    if intent.wants_mcu and not any("atmega" in c.value.lower() or "mcu" in c.description.lower() for c in board.components):
+    if intent.wants_mcu and not any("atmega" in (c.value or "").lower() for c in board.components):
         missing.append("microcontroller block")
 
     if generation_mode == "template" and _prompt_is_multi_block(intent, intent.normalized_prompt):
