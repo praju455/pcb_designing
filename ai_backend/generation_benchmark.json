@@ -77,6 +77,27 @@
       "priority": "quality",
       "expected_generation_mode": "synthesized",
       "expected_support_status": "supported"
+    },
+    {
+      "name": "protected_input_stage",
+      "prompt": "Design a protected 12V input stage with reverse polarity protection, fuse, TVS diode, and output header.",
+      "priority": "quality",
+      "expected_generation_mode": "synthesized",
+      "expected_support_status": "supported"
+    },
+    {
+      "name": "usb_power_interface",
+      "prompt": "Create a USB-powered 5V interface board with status LED and output header.",
+      "priority": "quality",
+      "expected_generation_mode": "synthesized",
+      "expected_support_status": "supported"
+    },
+    {
+      "name": "button_input_board",
+      "prompt": "Build a pushbutton input board with pull-up resistor and output header.",
+      "priority": "quality",
+      "expected_generation_mode": "synthesized",
+      "expected_support_status": "supported"
     }
   ]
 }

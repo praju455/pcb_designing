@@ -74,6 +74,101 @@ class CircuitBuilder:
         return data
 
 
+def add_usb_power_entry(builder: CircuitBuilder, vbus_net: str = "5V", gnd_net: str = "GND") -> str:
+    ref = builder.add_component(
+        "J",
+        "Connector_Generic",
+        "Conn_01x04",
+        "USB power",
+        "Connector_USB:USB_C_Receptacle_USB2.0_16P",
+        "USB power entry",
+        _pins(("1", "VBUS"), ("2", "D-"), ("3", "D+"), ("4", gnd_net)),
+    )
+    builder.connect(vbus_net, f"{ref}.1")
+    builder.connect(gnd_net, f"{ref}.4")
+    return ref
+
+
+def add_input_protection(
+    builder: CircuitBuilder,
+    input_net: str = "VIN",
+    protected_net: str = "VIN_PROTECTED",
+    gnd_net: str = "GND",
+) -> Dict[str, str]:
+    fuse = builder.add_component(
+        "F",
+        "Device",
+        "Fuse",
+        "500mA",
+        "Fuse:Fuse_1206_3216Metric",
+        "Input fuse",
+        _pins(("1", "1"), ("2", "2")),
+    )
+    series_diode = builder.add_component(
+        "D",
+        "Device",
+        "D",
+        "SS14",
+        "Diode_SMD:D_SMA",
+        "Reverse polarity protection diode",
+        _pins(("1", "A"), ("2", "K")),
+    )
+    tvs = builder.add_component(
+        "D",
+        "Device",
+        "D_TVS",
+        "SMBJ15A",
+        "Diode_SMD:D_SMB",
+        "Input TVS protection diode",
+        _pins(("1", "A"), ("2", "K")),
+    )
+    builder.connect(input_net, f"{fuse}.1")
+    builder.connect("FUSED_IN", f"{fuse}.2", f"{series_diode}.1")
+    builder.connect(protected_net, f"{series_diode}.2", f"{tvs}.2")
+    builder.connect(gnd_net, f"{tvs}.1")
+    return {"fuse": fuse, "series_diode": series_diode, "tvs": tvs}
+
+
+def add_button_input(
+    builder: CircuitBuilder,
+    output_net: str = "BTN_OUT",
+    supply_net: str = "VCC",
+    gnd_net: str = "GND",
+    label: str = "Push button",
+) -> Dict[str, str]:
+    switch = builder.add_component(
+        "SW",
+        "Switch",
+        "SW_Push",
+        label,
+        "Button_Switch_SMD:SW_Push_6mm",
+        "Momentary push button",
+        _pins(("1", output_net), ("2", gnd_net)),
+    )
+    pullup = builder.add_component(
+        "R",
+        "Device",
+        "R",
+        "10k",
+        "Resistor_SMD:R_0805_2012Metric",
+        "Button pull-up resistor",
+        _pins(("1", "1"), ("2", "2")),
+    )
+    header = builder.add_component(
+        "J",
+        "Connector_Generic",
+        "Conn_01x02",
+        "Button output",
+        "Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical",
+        "Button output header",
+        _pins(("1", output_net), ("2", gnd_net)),
+    )
+    builder.connect(supply_net, f"{pullup}.1")
+    builder.connect(output_net, f"{pullup}.2", f"{switch}.1", f"{header}.1")
+    builder.connect(gnd_net, f"{switch}.2", f"{header}.2")
+    return {"switch": switch, "pullup": pullup, "header": header}
+
+
 def add_power_input(builder: CircuitBuilder, net: str = "VCC", gnd_net: str = "GND", label: str = "Power input") -> str:
     ref = builder.add_component(
         "J",

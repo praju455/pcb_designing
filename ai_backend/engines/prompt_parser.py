@@ -14,6 +14,9 @@ _FAMILY_KEYWORDS = {
     "led": ["led", "indicator", "status light", "blinker"],
     "switch": ["mosfet", "transistor switch", "switch", "fan driver", "load driver"],
     "relay": ["relay", "relay driver", "spdt relay", "coil driver"],
+    "protection": ["reverse polarity", "input protection", "fuse", "tvs", "surge protection", "polarity protection"],
+    "usb": ["usb", "usb-c", "micro usb", "vbus", "usb power"],
+    "button": ["button", "pushbutton", "tactile switch", "reset switch"],
     "opamp": ["opamp", "op-amp", "buffer", "voltage follower", "amplifier"],
     "comparator": ["comparator", "threshold detector", "window detector", "lm393"],
     "divider": ["divider", "voltage divider", "resistor divider"],
@@ -71,6 +74,18 @@ class DesignIntent:
         return "relay" in self.families
 
     @property
+    def wants_protection(self) -> bool:
+        return "protection" in self.families
+
+    @property
+    def wants_usb(self) -> bool:
+        return "usb" in self.families
+
+    @property
+    def wants_button(self) -> bool:
+        return "button" in self.families
+
+    @property
     def wants_divider(self) -> bool:
         return "divider" in self.families
 
@@ -121,6 +136,12 @@ def parse_prompt(prompt: str, constraints: Optional[Dict[str, Any]] = None) -> D
         primary_family = "comparator"
     elif "relay" in families:
         primary_family = "relay"
+    elif "protection" in families:
+        primary_family = "protection"
+    elif "usb" in families:
+        primary_family = "usb"
+    elif "button" in families:
+        primary_family = "button"
 
     return DesignIntent(
         raw_prompt=prompt,
@@ -174,6 +195,12 @@ def _extract_load_hint(prompt: str) -> Optional[str]:
     return match.group(1) if match else None
 
 
+def _contains_keyword(prompt: str, keyword: str) -> bool:
+    if len(keyword) <= 3 and keyword.isalpha():
+        return re.search(rf"\b{re.escape(keyword)}\b", prompt) is not None
+    return keyword in prompt
+
+
 def _build_notes(prompt: str, constraints: Dict[str, Any]) -> List[str]:
     notes: List[str] = []
     if "low noise" in prompt or "analog" in prompt:
@@ -193,7 +220,7 @@ def _build_notes(prompt: str, constraints: Dict[str, Any]) -> List[str]:
         "unsupported_smps": ("buck converter", "boost converter", "switching regulator", "smps"),
     }
     for note, keywords in unsupported_patterns.items():
-        if any(keyword in prompt for keyword in keywords):
+        if any(_contains_keyword(prompt, keyword) for keyword in keywords):
             notes.append(note)
     if constraints:
         notes.append("has_constraints")

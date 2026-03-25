@@ -7,8 +7,10 @@ from typing import Any, Dict, Optional
 from .block_library import (
     CircuitBuilder,
     add_555_timer,
+    add_button_input,
     add_comparator_stage,
     add_decoupling_cap,
+    add_input_protection,
     add_led_indicator,
     add_linear_regulator,
     add_minimal_mcu,
@@ -18,6 +20,7 @@ from .block_library import (
     add_power_input,
     add_rc_lowpass,
     add_relay_driver,
+    add_usb_power_entry,
     add_voltage_divider,
 )
 from .prompt_parser import DesignIntent, parse_prompt
@@ -39,8 +42,19 @@ def synthesize_circuit(
 
     if simple_led_circuit:
         add_power_input(builder, net=input_net, label="Battery input")
+    elif intent.wants_usb:
+        add_usb_power_entry(builder, vbus_net=input_net)
     elif not simple_passive_signal_circuit:
         add_power_input(builder, net=input_net, label="Primary power input")
+
+    if intent.wants_protection and not simple_led_circuit and not simple_passive_signal_circuit:
+        protected_net = "VIN_PROTECTED"
+        add_input_protection(builder, input_net=input_net, protected_net=protected_net)
+        input_net = protected_net
+        if not intent.wants_regulator:
+            main_supply = protected_net
+        add_output_header(builder, signal_net=protected_net, label="Protected output")
+        synthesized = True
 
     synthesized = False
 
@@ -106,6 +120,14 @@ def synthesize_circuit(
         if not intent.wants_mcu:
             add_output_header(builder, signal_net=control_net, label="Relay control input")
         add_relay_driver(builder, control_net=control_net, supply_net=("12V" if (intent.supply_voltage or 0) >= 9 else supply_for_logic))
+        synthesized = True
+
+    if intent.wants_usb and not any(family in intent.families for family in ("regulator", "mcu", "relay", "switch")):
+        add_output_header(builder, signal_net=supply_for_logic, label="USB power output")
+        synthesized = True
+
+    if intent.wants_button:
+        add_button_input(builder, output_net="BTN_OUT", supply_net=supply_for_logic)
         synthesized = True
 
     if intent.wants_divider and not intent.wants_comparator:
@@ -223,5 +245,8 @@ def _needs_decoupling(intent: DesignIntent) -> bool:
             intent.wants_comparator,
             intent.wants_switch,
             intent.wants_relay,
+            intent.wants_button,
+            intent.wants_protection,
+            intent.wants_usb,
         )
     )

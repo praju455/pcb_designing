@@ -1266,6 +1266,10 @@ def _assess_support_status(intent: DesignIntent, generation_mode: str, board: Bo
         missing.append("comparator stage")
     if intent.wants_relay and "K" not in prefixes:
         missing.append("relay driver stage")
+    if intent.wants_protection and "F" not in prefixes:
+        missing.append("input protection stage")
+    if intent.wants_button and "SW" not in prefixes:
+        missing.append("button input stage")
     if intent.wants_regulator and not any(c.part.startswith(("AMS1117", "LM7805")) for c in board.components):
         missing.append("regulator stage")
     if intent.wants_divider and len([c for c in board.components if c.prefix == "R"]) < 2:
