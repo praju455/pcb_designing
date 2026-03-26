@@ -1947,30 +1947,34 @@ class AIDashboardDialog(wx.Frame):
         self._show_text("Write Components to PCB", "\n".join(lines))
 
     def _on_netlist(self, event):
-        prompt = self._prompt_dialog(
-            "Generate Netlist",
-            "Describe the circuit to summarize as a netlist:",
-            "op amp buffer for analog sensor output",
-        )
-        if not prompt:
-            return
-        self._set_status("Generating netlist summary...", (255, 210, 90))
+        self._set_status("Reading board netlist...", (255, 210, 90))
         try:
-            result = self._post_json("/generate", {"prompt": prompt, "priority": "quality"})
-            if not result.get("success"):
-                raise RuntimeError(result.get("error", "Unknown backend error"))
-            connections = (result.get("circuit_data") or {}).get("connections", [])
-            lines = []
-            for conn in connections[:12]:
-                net_name = conn.get('net')
-                pin_str = ', '.join([f"{p.get('ref')}.{p.get('pin')}" for p in conn.get('pins', [])])
-                lines.append(f"{net_name}: {pin_str}")
-            text = "Netlist summary\n\n" + ("\n".join(lines) if lines else "No nets returned")
-            self._set_status("Netlist generated.", (0, 210, 110))
-            self._show_text("Generate Netlist", text)
+            data = self._collect_board_data()
+            components = data.get("components", [])
+            connections = data.get("connections", [])
+            if not components:
+                raise RuntimeError("No footprints found on the current board.")
+
+            lines = ["Active PCB netlist summary", ""]
+            lines.append(f"Components: {len(components)}")
+            lines.append(f"Nets: {len(connections)}")
+
+            if connections:
+                lines.append("")
+                lines.append("Net connections:")
+                for conn in connections[:16]:
+                    net_name = conn.get("net", "<unnamed>")
+                    pin_str = ", ".join(f"{p.get('ref')}.{p.get('pin')}" for p in conn.get("pins", []))
+                    lines.append(f"{net_name}: {pin_str}")
+            else:
+                lines.append("")
+                lines.append("No routed or connected nets were found on the current board.")
+
+            self._set_status("Board netlist summarized.", (0, 210, 110))
+            self._show_text("Generate Netlist", "\n".join(lines))
         except Exception as exc:
-            self._set_status("Netlist generation failed.", (255, 120, 120))
-            self._show_text("Error", str(exc))
+            self._set_status("Netlist summary failed.", (255, 120, 120))
+            self._show_text("Generate Netlist", str(exc))
 
     def _on_placement(self, event):
         self._set_status("Running placement optimization...", (255, 210, 90))
