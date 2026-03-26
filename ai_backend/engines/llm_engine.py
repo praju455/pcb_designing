@@ -65,6 +65,8 @@ _env_model = os.environ.get("OLLAMA_MODEL", "").strip()
 OLLAMA_MODEL_CANDIDATES: list[str] = (
     [_env_model] if _env_model else []
 ) + [
+    "qwen2.5-coder:7b",       # Primary: best for code/circuit JSON generation
+    "qwen2.5-coder:latest",
     "deepseek-coder:6.7b",
     "deepseek-coder:latest",
     "deepseek-coder-v2:latest",
