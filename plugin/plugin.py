@@ -70,12 +70,20 @@ class PluginConfig:
     
     @classmethod
     def load(cls) -> PluginConfig:
-        """Load configuration from disk."""
+        """Load configuration from disk, filtering out legacy fields."""
         path = os.path.join(os.path.expanduser("~"), ".ai_pcb_assistant", "config.json")
         if os.path.exists(path):
-            with open(path, 'r') as f:
-                data = json.load(f)
-                return cls(**data)
+            try:
+                with open(path, 'r') as f:
+                    data = json.load(f)
+                
+                # Filter to only keep keys that exist as fields in the dataclass
+                import dataclasses
+                field_names = {f.name for f in dataclasses.fields(cls)}
+                filtered_data = {k: v for k, v in data.items() if k in field_names}
+                return cls(**filtered_data)
+            except Exception as exc:
+                logger.warning("Failed to load config: %s. Using defaults.", exc)
         return cls()
 
 CONFIG = PluginConfig.load()
@@ -489,8 +497,19 @@ class AIPlacementPlugin(pcbnew.ActionPlugin):
                 return
             dlg.Destroy()
 
-        # Show main window — keep reference alive on self
+        launcher = AIAssistantDialog(None, board)
+        launcher.CentreOnScreen()
+        try:
+            result = launcher.ShowModal()
+        finally:
+            launcher.Destroy()
+
+        if result != wx.ID_OK:
+            return
+
+        # Show main window and keep reference alive on self
         self._frame = AIPCBFrame(None, board)
+        self._frame.CentreOnScreen()
         self._frame.Show()
         self._frame.Raise()
     
@@ -866,22 +885,29 @@ class AIPCBFrame(wx.Frame):
 
         # Extract nets with classification
         try:
-            net_info = self.board.GetNetInfo()
-            nets_map = net_info.NetsByName()
-            for net_name, net in nets_map.items():
+            # Use GetNetsByNetCode for better compatibility with KiCad 8/9
+            nets_dict = self.board.GetNetsByNetCode()
+            for net_code, net in nets_dict.items():
                 try:
-                    if net.GetNetCode() == 0:
+                    if net.GetNetCode() <= 0:
                         continue
+                    
+                    net_name = net.GetNetname()
                     net_type = self._classify_net(str(net_name))
                     pins = []
+                    
                     for pad in net.GetPads():
                         try:
+                            parent = pad.GetParent()
+                            if not parent:
+                                continue
                             pins.append({
-                                "ref": pad.GetParent().GetReference(),
-                                "pin": pad.GetNumber(),
+                                "ref": parent.GetReference(),
+                                "pin": str(pad.GetNumber()),
                             })
                         except Exception:
                             pass
+                            
                     if len(pins) >= 2:
                         self.nets.append(NetInfo(
                             name=str(net_name),
@@ -1347,28 +1373,53 @@ class AIPCBFrame(wx.Frame):
 # ── Legacy Dialog for compatibility ───────────────────────────────────────────
 
 class AIAssistantDialog(wx.Dialog):
-    """Legacy dialog for simple usage."""
+    """Simple visible launcher for the main PCB assistant UI."""
     
     def __init__(self, parent, board):
-        super().__init__(parent, title="AI PCB Assistant", size=(500, 400))
+        super().__init__(parent, title="AI PCB Assistant", size=(500, 260))
         self.board = board
         self._init_ui()
     
     def _init_ui(self):
-        # Simple UI for basic usage
         panel = wx.Panel(self)
         sizer = wx.BoxSizer(wx.VERTICAL)
-        
-        sizer.Add(wx.StaticText(panel, label="Use the full AI PCB Assistant window\n"
-                                           "for advanced features."), 0, wx.ALL, 20)
-        
-        btn_open = wx.Button(panel, label="Open Full Interface")
+
+        title = wx.StaticText(panel, label="AI PCB Assistant")
+        title.SetFont(wx.Font(16, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
+        sizer.Add(title, 0, wx.ALL | wx.ALIGN_CENTER_HORIZONTAL, 20)
+
+        sizer.Add(
+            wx.StaticText(
+                panel,
+                label="Open the AI placement and board-analysis interface for the current PCB.",
+            ),
+            0,
+            wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.ALIGN_CENTER_HORIZONTAL,
+            14,
+        )
+
+        try:
+            board_name = os.path.basename(self.board.GetFileName()) if self.board else ""
+        except Exception:
+            board_name = ""
+        if board_name:
+            sizer.Add(
+                wx.StaticText(panel, label=f"Current board: {board_name}"),
+                0,
+                wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.ALIGN_CENTER_HORIZONTAL,
+                10,
+            )
+
+        btn_row = wx.BoxSizer(wx.HORIZONTAL)
+        btn_cancel = wx.Button(panel, wx.ID_CANCEL, "Cancel")
+        btn_open = wx.Button(panel, wx.ID_OK, "Open Interface")
         btn_open.Bind(wx.EVT_BUTTON, self._on_open_full)
-        sizer.Add(btn_open, 0, wx.ALIGN_CENTER | wx.ALL, 10)
-        
+        btn_row.Add(btn_cancel, 0, wx.RIGHT, 10)
+        btn_row.Add(btn_open, 0)
+        sizer.Add(btn_row, 0, wx.ALIGN_CENTER | wx.ALL, 18)
+
         panel.SetSizer(sizer)
     
     def _on_open_full(self, event):
         self.EndModal(wx.ID_OK)
-        frame = AIPCBFrame(None, self.board)
         frame.Show()
